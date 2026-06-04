@@ -1,0 +1,9 @@
+{
+  "name": "Heading Hierarchy Fixer",
+  "version": "1.0.0",
+  "description": "Fixes H1 and heading hierarchy issues.",
+  "designerExtension": {
+    "url": "public/index.html",
+    "permissions": ["webflow:design"]
+  }
+}
