@@ -1,121 +1,87 @@
-/**
- * Heading Hierarchy Fixer — Webflow Designer Extension
- * ─────────────────────────────────────────────────────
- * Fixes two classes of heading issues on the current page:
- * 1. Multiple H1s  → all H1s after the first are demoted to H2
- * 2. Hierarchy skips → e.g. H2→H6 is corrected to H2→H3
- *
- * Webflow Designer API reference:
- * https://developers.webflow.com/designer/reference
- */
-
 "use strict";
 
-// ─── DOM Refs ───────────────────────────────────────────────────────────────
-const btnFix       = document.getElementById("btnFix");
-const btnScan      = document.getElementById("btnScan");
-const btnClearLog  = document.getElementById("btnClearLog");
-const statusStrip  = document.getElementById("statusStrip");
-const statusText   = document.getElementById("statusText");
-const logPanel     = document.getElementById("logPanel");
-const logEmpty     = document.getElementById("logEmpty");
-const statTotal    = document.getElementById("statTotal");
-const statIssues   = document.getElementById("statIssues");
-const statFixed    = document.getElementById("statFixed");
+// ─── DOM Refs ────────────────────────────────────────────────────────────────
+const btnFix        = document.getElementById("btnFix");
+const btnScan       = document.getElementById("btnScan");
+const btnClearLog   = document.getElementById("btnClearLog");
+const statusStrip   = document.getElementById("statusStrip");
+const statusText    = document.getElementById("statusText");
+const logPanel      = document.getElementById("logPanel");
+const logEmpty      = document.getElementById("logEmpty");
+const statTotal     = document.getElementById("statTotal");
+const statIssues    = document.getElementById("statIssues");
+const statFixed     = document.getElementById("statFixed");
 const statCardIssues = document.getElementById("statCardIssues");
 const statCardFixed  = document.getElementById("statCardFixed");
 
-// ─── Heading tag helpers ────────────────────────────────────────────────────
-const HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"];
+// ─── Heading helpers ─────────────────────────────────────────────────────────
+const HEADING_TAGS = ["h1","h2","h3","h4","h5","h6"];
 
-/**
- * Returns the numeric level for a heading tag string, or null if not a heading.
- * @param {string} tag
- * @returns {number|null}
- */
 function headingLevel(tag) {
   if (typeof tag !== "string") return null;
-  const t = tag.toLowerCase().trim();
-  const idx = HEADING_TAGS.indexOf(t);
+  const idx = HEADING_TAGS.indexOf(tag.toLowerCase().trim());
   return idx === -1 ? null : idx + 1;
 }
 
-/**
- * Returns "h1" … "h6" for a given level number.
- * @param {number} level  1–6
- * @returns {string}
- */
 function levelToTag(level) {
-  return `h${Math.max(1, Math.min(6, level))}`;
+  return "h" + Math.max(1, Math.min(6, level));
 }
 
-// ─── UI Helpers ─────────────────────────────────────────────────────────────
-/** @param {"idle"|"info"|"success"|"warning"|"error"} type */
+// ─── UI helpers ──────────────────────────────────────────────────────────────
 function setStatus(type, message) {
-  statusStrip.className = `status-strip ${type}`;
+  statusStrip.className = "status-strip " + type;
   statusText.textContent = message;
 }
 
-/**
- * @param {string} message
- * @param {"fix"|"warn"|"error"|"info"|"muted"} [type="muted"]
- */
-function log(message, type = "muted") {
-  // Remove the "no activity" placeholder on first real entry
+function log(message, type) {
+  type = type || "muted";
   if (logEmpty && logEmpty.parentNode === logPanel) {
     logPanel.removeChild(logEmpty);
   }
-
-  const now  = new Date();
-  const ts   = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}:${String(now.getSeconds()).padStart(2,"0")}`;
-
+  const now = new Date();
+  const ts  = String(now.getHours()).padStart(2,"0") + ":" +
+              String(now.getMinutes()).padStart(2,"0") + ":" +
+              String(now.getSeconds()).padStart(2,"0");
   const entry = document.createElement("div");
-  entry.className = `log-entry ${type}`;
-  entry.innerHTML = `<span class="log-ts">${ts}</span><span class="log-msg">${escapeHtml(message)}</span>`;
+  entry.className = "log-entry " + type;
+  entry.innerHTML = '<span class="log-ts">' + ts + '</span>' +
+                    '<span class="log-msg">' + escapeHtml(message) + '</span>';
   logPanel.appendChild(entry);
   logPanel.scrollTop = logPanel.scrollHeight;
 }
 
 function escapeHtml(str) {
   return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 function setStats(total, issues, fixed) {
   statTotal.textContent  = total  !== null ? total  : "—";
   statIssues.textContent = issues !== null ? issues : "—";
   statFixed.textContent  = fixed  !== null ? fixed  : "—";
-
-  if (statCardIssues) statCardIssues.classList.toggle("warn",  issues > 0);
-  if (statCardFixed) statCardFixed.classList.toggle("fixed",  fixed  > 0);
+  statCardIssues.classList.toggle("warn",  issues > 0);
+  statCardFixed.classList.toggle("fixed",  fixed  > 0);
 }
 
 function setButtonsLoading(loading) {
-  btnFix.disabled   = loading;
-  btnScan.disabled  = loading;
+  btnFix.disabled  = loading;
+  btnScan.disabled = loading;
   btnFix.classList.toggle("loading", loading);
 }
 
-// ─── Core: Recursive Element Tree Walker ────────────────────────────────────
-/**
- * Recursively walk a Webflow element tree (breadth/depth).
- * Collects all elements where type === "Heading".
- *
- * @param {AnyElement} element
- * @param {AnyElement[]} collected  - array populated in-place
- * @returns {Promise<void>}
- */
+// ─── Check Webflow API ───────────────────────────────────────────────────────
+function isWebflowAvailable() {
+  return typeof webflow !== "undefined" && webflow !== null;
+}
+
+// ─── Recursive heading collector ─────────────────────────────────────────────
 async function collectHeadings(element, collected) {
   try {
     const type = await element.getType();
     if (type === "Heading") {
       collected.push(element);
     }
-  } catch (_) {
-    // Some element types may not support getType; skip them gracefully.
-  }
+  } catch (_) {}
 
   try {
     const children = await element.getChildren();
@@ -124,231 +90,201 @@ async function collectHeadings(element, collected) {
         await collectHeadings(child, collected);
       }
     }
-  } catch (_) {
-    // Leaf node or unsupported getChildren — no action needed.
-  }
+  } catch (_) {}
 }
 
-// ─── Core: Analyse Headings ──────────────────────────────────────────────────
-/**
- * Given an ordered list of heading elements, returns an array of issue
- * descriptors without making any changes to the DOM.
- *
- * @param {Array<{element: AnyElement, tag: string}>} headingEntries
- * @returns {Array<object>}
- */
+// ─── Analyse headings ─────────────────────────────────────────────────────────
 function analyseHeadings(headingEntries) {
   const issues = [];
-  let h1Count = 0;
-  let prevLevel = 0; // 0 = no heading seen yet
+  let h1Count   = 0;
+  let prevLevel = 0;
 
-  for (let i = 0; i < headingEntries.length; i++) {
-    const entry = headingEntries[i];
+  for (const entry of headingEntries) {
     const { element, tag } = entry;
     let currentLevel = headingLevel(tag);
-
     if (currentLevel === null) continue;
 
-    let targetLevel = currentLevel;
-    let isIssue = false;
-    let reasonParts = [];
-
-    // ── Rule 1: পেজের প্রথম হেডিং অবশ্যই H1 হতে হবে ──
-    if (i === 0 && currentLevel !== 1) {
-      targetLevel = 1;
-      isIssue = true;
-      reasonParts.push(`First heading must be H1 (found ${tag.toUpperCase()})`);
-    }
-
-    // ── Rule 2: একাধিক H1 থাকলে সেগুলোকে H2 করা ──
+    // Rule 1: Multiple H1
     if (currentLevel === 1) {
       h1Count++;
       if (h1Count > 1) {
-        targetLevel = 2;
-        isIssue = true;
-        reasonParts.push(`Duplicate H1 found (H1 #${h1Count}) → demoted to H2`);
+        const target = 2;
+        issues.push({
+          element,
+          currentTag:   tag,
+          currentLevel,
+          targetTag:    levelToTag(target),
+          targetLevel:  target,
+          reason:       "Duplicate H1 #" + h1Count + " → demoted to H2",
+        });
+        currentLevel = target;
+        entry.effectiveLevel = target;
+      } else {
+        entry.effectiveLevel = 1;
       }
+    } else {
+      entry.effectiveLevel = currentLevel;
     }
 
-    // ── Rule 3: হেডিং সিকোয়েন্স স্কিপ চেক (যেমন H2 -> H6) ──
-    // এটি শুধুমাত্র তখনই কাজ করবে যখন আগের কোনো হেডিং লেভেল থাকবে এবং এটি ব্যাকওয়ার্ড জাম্প হবে না
-    const effectivePrevLevel = i === 0 ? prevLevel : (headingEntries[i - 1].effectiveLevel ?? prevLevel);
-    
-    if (effectivePrevLevel > 0) {
-      // যদি কারেন্ট লেভেল আগের ইফেক্টিভ লেভেলের চেয়ে ১ এর বেশি বড় হয়
-      const checkLevel = isIssue ? targetLevel : currentLevel;
-      if (checkLevel - effectivePrevLevel > 1) {
-        targetLevel = effectivePrevLevel + 1;
-        isIssue = true;
-        reasonParts.push(`Hierarchy skip detected (${levelToTag(effectivePrevLevel).toUpperCase()} → ${tag.toUpperCase()}, corrected to ${levelToTag(targetLevel).toUpperCase()})`);
+    // Rule 2: Hierarchy skip
+    if (prevLevel > 0 && currentLevel > prevLevel + 1) {
+      const target = prevLevel + 1;
+      const existing = issues.find(function(i) { return i.element === element; });
+      if (existing) {
+        existing.targetTag   = levelToTag(target);
+        existing.targetLevel = target;
+        existing.reason     += " + skip " + levelToTag(prevLevel) + "→" + levelToTag(currentLevel) + " fixed to " + levelToTag(target);
+      } else {
+        issues.push({
+          element,
+          currentTag:   levelToTag(currentLevel),
+          currentLevel,
+          targetTag:    levelToTag(target),
+          targetLevel:  target,
+          reason:       "Skip: " + levelToTag(prevLevel) + " → " + levelToTag(currentLevel) + " corrected to " + levelToTag(target),
+        });
       }
+      entry.effectiveLevel = target;
+      currentLevel = target;
     }
 
-    // ইফেক্টিভ লেভেল ট্র্যাক করে রাখা যাতে পরবর্তী লুপ এটি ব্যবহার করতে পারে
-    entry.effectiveLevel = isIssue ? targetLevel : currentLevel;
-    prevLevel = entry.effectiveLevel;
-
-    if (isIssue) {
-      issues.push({
-        element,
-        currentTag: tag,
-        currentLevel,
-        targetTag: levelToTag(targetLevel),
-        targetLevel,
-        reason: reasonParts.join(" + "),
-      });
-    }
+    prevLevel = entry.effectiveLevel !== undefined ? entry.effectiveLevel : currentLevel;
   }
 
   return issues;
 }
 
-// ─── Core: Apply Fixes ──────────────────────────────────────────────────────
-/**
- * Applies a list of issue fixes by calling element.setTag(targetTag).
- * Returns the count of successfully applied fixes.
- *
- * @param {Array<object>} issues
- * @returns {Promise<number>}
- */
+// ─── Apply fixes ─────────────────────────────────────────────────────────────
 async function applyFixes(issues) {
   let fixedCount = 0;
-
   for (const issue of issues) {
     try {
       await issue.element.setTag(issue.targetTag);
-      log(`✓ Fixed: ${issue.reason}`, "fix");
+      log("✓ " + issue.reason, "fix");
       fixedCount++;
     } catch (err) {
-      log(`✗ Failed to fix ${issue.currentTag}: ${err.message ?? err}`, "error");
+      log("✗ Failed: " + (err.message || err), "error");
     }
   }
-
   return fixedCount;
 }
 
-// ─── Core: Main Orchestrator ─────────────────────────────────────────────────
-/**
- * Main entry point shared by Scan and Fix modes.
- *
- * @param {"scan"|"fix"} mode
- */
+// ─── Main runner ─────────────────────────────────────────────────────────────
 async function run(mode) {
+
+  // ── Guard: check Webflow API is available ──────────────────────────────────
+  if (!isWebflowAvailable()) {
+    setStatus("error", "Webflow Designer API not found.");
+    log("Error: This extension must run inside the Webflow Designer.", "error");
+    log("Open this via the Apps panel in Webflow Designer (press E).", "warn");
+    return;
+  }
+
   setButtonsLoading(true);
-  setStatus("info", mode === "fix" ? "Scanning page for heading issues…" : "Scanning page…");
-  log(`─── ${mode === "fix" ? "Fix" : "Scan"} started ───────────────────────`, "info");
+  setStatus("info", mode === "fix" ? "Scanning for heading issues…" : "Scanning page…");
+  log("─── " + (mode === "fix" ? "Fix" : "Scan") + " started ───────────────────────", "info");
 
   try {
-    // ── 1. Get the page root ──────────────────────────────────────────
+    // 1. Get root
     const rootElement = await webflow.getRootElement();
     if (!rootElement) {
-      setStatus("error", "Could not access page root. Is a page open?");
-      log("Error: getRootElement() returned null. Open a page first.", "error");
+      setStatus("error", "Cannot access page root. Is a page open?");
+      log("Error: getRootElement() returned null.", "error");
       setStats(null, null, null);
       return;
     }
 
-    log("Page root acquired. Traversing element tree…", "muted");
+    log("Page root found. Scanning elements…", "muted");
 
-    // ── 2. Collect all heading elements ──────────────────────────────
+    // 2. Collect headings
     const rawHeadings = [];
     await collectHeadings(rootElement, rawHeadings);
-
-    log(`Found ${rawHeadings.length} heading element${rawHeadings.length !== 1 ? "s" : ""}.`, "muted");
+    log("Found " + rawHeadings.length + " heading element(s).", "muted");
 
     if (rawHeadings.length === 0) {
       setStatus("success", "No headings on this page — nothing to check.");
       setStats(0, 0, 0);
-      log("Nothing to fix.", "muted");
+      log("No headings found.", "muted");
       return;
     }
 
-    // ── 3. Read current tags ──────────────────────────────────────────
+    // 3. Read tags
     const headingEntries = [];
     for (const el of rawHeadings) {
       try {
-        const tag = await el.getTag();
+        const tag   = await el.getTag();
         const level = headingLevel(tag);
         if (level !== null) {
-          headingEntries.push({ element: el, tag });
+          headingEntries.push({ element: el, tag: tag });
         }
       } catch (err) {
-        log(`Warning: Could not read tag for an element — skipped. (${err.message ?? err})`, "warn");
+        log("Warning: Could not read tag — skipped.", "warn");
       }
     }
 
-    // ── 4. Analyse ────────────────────────────────────────────────────
+    // 4. Analyse
     const issues = analyseHeadings(headingEntries);
-
-    log(`Analysis complete. ${issues.length} issue${issues.length !== 1 ? "s" : ""} found.`, issues.length > 0 ? "warn" : "muted");
-
+    log("Analysis done. " + issues.length + " issue(s) found.", issues.length > 0 ? "warn" : "muted");
     setStats(headingEntries.length, issues.length, null);
 
     if (issues.length === 0) {
-      setStatus("success", "No heading issues detected — structure is clean!");
+      setStatus("success", "No heading issues — structure is clean!");
       setStats(headingEntries.length, 0, 0);
       return;
     }
 
-    // ── 5a. Scan only — report issues, no writes ──────────────────────
+    // 5a. Scan only
     if (mode === "scan") {
-      log("Issues detected (scan mode — no changes made):", "warn");
-      issues.forEach(issue => {
-        log(`  • ${issue.reason}`, "warn");
+      log("Issues found (scan only — no changes made):", "warn");
+      issues.forEach(function(issue) {
+        log("  • " + issue.reason, "warn");
       });
-      setStatus("warning", `${issues.length} issue${issues.length !== 1 ? "s" : ""} found. Click "Fix Heading Issues" to apply corrections.`);
-      setStats(headingEntries.length, issues.length, null);
+      setStatus("warning", issues.length + " issue(s) found. Click Fix to apply corrections.");
       return;
     }
 
-    // ── 5b. Fix mode — apply corrections ─────────────────────────────
-    log(`Applying ${issues.length} fix${issues.length !== 1 ? "es" : ""}…`, "info");
+    // 5b. Fix mode
+    log("Applying " + issues.length + " fix(es)…", "info");
     const fixedCount = await applyFixes(issues);
-
     setStats(headingEntries.length, issues.length, fixedCount);
 
     if (fixedCount === issues.length) {
-      setStatus("success", `All ${fixedCount} issue${fixedCount !== 1 ? "s" : ""} fixed successfully!`);
-      log(`─── Done. ${fixedCount} fix${fixedCount !== 1 ? "es" : ""} applied. ───────────────────────`, "fix");
+      setStatus("success", "All " + fixedCount + " issue(s) fixed successfully!");
+      log("─── Done. " + fixedCount + " fix(es) applied. ───────────────────────", "fix");
     } else {
       const failed = issues.length - fixedCount;
-      setStatus("warning", `${fixedCount} fixed, ${failed} failed. Check the log for details.`);
-      log(`─── Done with errors. ${fixedCount} fixed, ${failed} failed. ───`, "warn");
+      setStatus("warning", fixedCount + " fixed, " + failed + " failed. Check log.");
+      log("─── Done with errors. " + fixedCount + " fixed, " + failed + " failed. ───", "warn");
     }
 
   } catch (err) {
-    const message = err?.message ?? String(err);
-    setStatus("error", `Unexpected error: ${message}`);
-    log(`Unexpected error: ${message}`, "error");
-    console.error("[Heading Fixer] Unexpected error:", err);
+    const message = err && err.message ? err.message : String(err);
+    setStatus("error", "Error: " + message);
+    log("Error: " + message, "error");
     setStats(null, null, null);
   } finally {
     setButtonsLoading(false);
   }
 }
 
-// ─── Button Handlers ────────────────────────────────────────────────────────
-if (btnFix) btnFix.addEventListener("click", () => run("fix"));
-if (btnScan) btnScan.addEventListener("click", () => run("scan"));
+// ─── Button events ────────────────────────────────────────────────────────────
+btnFix.addEventListener("click",  function() { run("fix");  });
+btnScan.addEventListener("click", function() { run("scan"); });
 
-if (btnClearLog) {
-  btnClearLog.addEventListener("click", () => {
-    logPanel.innerHTML = "";
-    const empty = document.createElement("div");
-    empty.className = "log-empty";
-    empty.id        = "logEmpty";
-    empty.textContent = "No activity yet.";
-    logPanel.appendChild(empty);
-    setStats(null, null, null);
-    if (statCardIssues) statCardIssues.classList.remove("warn");
-    if (statCardFixed) statCardFixed.classList.remove("fixed");
-    setStatus("idle", "Ready — click a button below to begin.");
-  });
-}
+btnClearLog.addEventListener("click", function() {
+  logPanel.innerHTML = "";
+  const empty = document.createElement("div");
+  empty.className   = "log-empty";
+  empty.id          = "logEmpty";
+  empty.textContent = "No activity yet.";
+  logPanel.appendChild(empty);
+  setStats(null, null, null);
+  statCardIssues.classList.remove("warn");
+  statCardFixed.classList.remove("fixed");
+  setStatus("idle", "Ready — click a button below to begin.");
+});
 
-// ─── Webflow Extension Lifecycle ────────────────────────────────────────────
+// ─── Extension size ───────────────────────────────────────────────────────────
 try {
   webflow.setExtensionSize({ height: 600 });
-} catch (_) {
-  // setExtensionSize is optional / may not exist in all runtime versions
-}
+} catch (_) {}
