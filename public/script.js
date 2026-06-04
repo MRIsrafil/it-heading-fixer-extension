@@ -2,11 +2,11 @@
  * Heading Hierarchy Fixer — Webflow Designer Extension
  * ─────────────────────────────────────────────────────
  * Fixes two classes of heading issues on the current page:
- *   1. Multiple H1s  → all H1s after the first are demoted to H2
- *   2. Hierarchy skips → e.g. H2→H6 is corrected to H2→H3
+ * 1. Multiple H1s  → all H1s after the first are demoted to H2
+ * 2. Hierarchy skips → e.g. H2→H6 is corrected to H2→H3
  *
  * Webflow Designer API reference:
- *   https://developers.webflow.com/designer/reference
+ * https://developers.webflow.com/designer/reference
  */
 
 "use strict";
@@ -88,8 +88,8 @@ function setStats(total, issues, fixed) {
   statIssues.textContent = issues !== null ? issues : "—";
   statFixed.textContent  = fixed  !== null ? fixed  : "—";
 
-  statCardIssues.classList.toggle("warn",  issues > 0);
-  statCardFixed.classList.toggle("fixed",  fixed  > 0);
+  if (statCardIssues) statCardIssues.classList.toggle("warn",  issues > 0);
+  if (statCardFixed) statCardFixed.classList.toggle("fixed",  fixed  > 0);
 }
 
 function setButtonsLoading(loading) {
@@ -102,9 +102,6 @@ function setButtonsLoading(loading) {
 /**
  * Recursively walk a Webflow element tree (breadth/depth).
  * Collects all elements where type === "Heading".
- *
- * The Webflow Designer API represents children via:
- *   element.getChildren()  → Promise<AnyElement[]>
  *
  * @param {AnyElement} element
  * @param {AnyElement[]} collected  - array populated in-place
@@ -137,85 +134,70 @@ async function collectHeadings(element, collected) {
  * Given an ordered list of heading elements, returns an array of issue
  * descriptors without making any changes to the DOM.
  *
- * Issue descriptor:
- * {
- *   element:      AnyElement,
- *   currentTag:   string,          // e.g. "h4"
- *   currentLevel: number,          // e.g. 4
- *   targetTag:    string,          // e.g. "h3"
- *   targetLevel:  number,          // e.g. 3
- *   reason:       string,          // human-readable explanation
- * }
- *
  * @param {Array<{element: AnyElement, tag: string}>} headingEntries
  * @returns {Array<object>}
  */
 function analyseHeadings(headingEntries) {
   const issues = [];
+  let h1Count = 0;
+  let prevLevel = 0; // 0 = no heading seen yet
 
-  let h1Count      = 0;
-  let prevLevel    = 0; // 0 = no heading seen yet
-
-  for (const entry of headingEntries) {
+  for (let i = 0; i < headingEntries.length; i++) {
+    const entry = headingEntries[i];
     const { element, tag } = entry;
-    let   currentLevel     = headingLevel(tag);
+    let currentLevel = headingLevel(tag);
 
-    if (currentLevel === null) continue; // shouldn't happen, but guard anyway
+    if (currentLevel === null) continue;
 
-    // ── Rule 1: Multiple H1 ────────────────────────────────────────
+    let targetLevel = currentLevel;
+    let isIssue = false;
+    let reasonParts = [];
+
+    // ── Rule 1: পেজের প্রথম হেডিং অবশ্যই H1 হতে হবে ──
+    if (i === 0 && currentLevel !== 1) {
+      targetLevel = 1;
+      isIssue = true;
+      reasonParts.push(`First heading must be H1 (found ${tag.toUpperCase()})`);
+    }
+
+    // ── Rule 2: একাধিক H1 থাকলে সেগুলোকে H2 করা ──
     if (currentLevel === 1) {
       h1Count++;
       if (h1Count > 1) {
-        const target = 2;
-        issues.push({
-          element,
-          currentTag:   tag,
-          currentLevel,
-          targetTag:    levelToTag(target),
-          targetLevel:  target,
-          reason:       `Duplicate H1 found (H1 #${h1Count}) → demoted to H2`,
-        });
-        // For subsequent hierarchy checks, treat this heading as H2
-        currentLevel = target;
-        entry.effectiveLevel = target;
-      } else {
-        entry.effectiveLevel = 1;
+        targetLevel = 2;
+        isIssue = true;
+        reasonParts.push(`Duplicate H1 found (H1 #${h1Count}) → demoted to H2`);
       }
-    } else {
-      entry.effectiveLevel = currentLevel;
     }
 
-    // ── Rule 2: Hierarchy skip ─────────────────────────────────────
-    // Only fires when:
-    //   • We have seen at least one heading before (prevLevel > 0)
-    //   • The heading would skip more than one level downward
-    //     e.g. prevLevel=2, current=4 → should be 3
-    if (prevLevel > 0 && currentLevel > prevLevel + 1) {
-      const target = prevLevel + 1;
-
-      // If we already logged this element as a multiple-H1 issue, update
-      // the existing issue record's target instead of creating a duplicate.
-      const existing = issues.find(i => i.element === element);
-      if (existing) {
-        existing.targetTag   = levelToTag(target);
-        existing.targetLevel = target;
-        existing.reason     += ` + hierarchy skip (${levelToTag(prevLevel)}→${levelToTag(currentLevel)}, corrected to ${levelToTag(target)})`;
-      } else {
-        issues.push({
-          element,
-          currentTag:   levelToTag(currentLevel),
-          currentLevel,
-          targetTag:    levelToTag(target),
-          targetLevel:  target,
-          reason:       `Heading skip detected: ${levelToTag(prevLevel)} → ${levelToTag(currentLevel)} (corrected to ${levelToTag(target)})`,
-        });
+    // ── Rule 3: হেডিং সিকোয়েন্স স্কিপ চেক (যেমন H2 -> H6) ──
+    // এটি শুধুমাত্র তখনই কাজ করবে যখন আগের কোনো হেডিং লেভেল থাকবে এবং এটি ব্যাকওয়ার্ড জাম্প হবে না
+    const effectivePrevLevel = i === 0 ? prevLevel : (headingEntries[i - 1].effectiveLevel ?? prevLevel);
+    
+    if (effectivePrevLevel > 0) {
+      // যদি কারেন্ট লেভেল আগের ইফেক্টিভ লেভেলের চেয়ে ১ এর বেশি বড় হয়
+      const checkLevel = isIssue ? targetLevel : currentLevel;
+      if (checkLevel - effectivePrevLevel > 1) {
+        targetLevel = effectivePrevLevel + 1;
+        isIssue = true;
+        reasonParts.push(`Hierarchy skip detected (${levelToTag(effectivePrevLevel).toUpperCase()} → ${tag.toUpperCase()}, corrected to ${levelToTag(targetLevel).toUpperCase()})`);
       }
-
-      entry.effectiveLevel = target;
-      currentLevel = target;
     }
 
-    prevLevel = entry.effectiveLevel ?? currentLevel;
+    // ইফেক্টিভ লেভেল ট্র্যাক করে রাখা যাতে পরবর্তী লুপ এটি ব্যবহার করতে পারে
+    entry.effectiveLevel = isIssue ? targetLevel : currentLevel;
+    prevLevel = entry.effectiveLevel;
+
+    if (isIssue) {
+      issues.push({
+        element,
+        currentTag: tag,
+        currentLevel,
+        targetTag: levelToTag(targetLevel),
+        targetLevel,
+        reason: reasonParts.join(" + "),
+      });
+    }
   }
 
   return issues;
@@ -235,7 +217,7 @@ async function applyFixes(issues) {
   for (const issue of issues) {
     try {
       await issue.element.setTag(issue.targetTag);
-      log(`✓ ${issue.reason}`, "fix");
+      log(`✓ Fixed: ${issue.reason}`, "fix");
       fixedCount++;
     } catch (err) {
       log(`✗ Failed to fix ${issue.currentTag}: ${err.message ?? err}`, "error");
@@ -346,26 +328,25 @@ async function run(mode) {
 }
 
 // ─── Button Handlers ────────────────────────────────────────────────────────
-btnFix.addEventListener("click", () => run("fix"));
+if (btnFix) btnFix.addEventListener("click", () => run("fix"));
+if (btnScan) btnScan.addEventListener("click", () => run("scan"));
 
-btnScan.addEventListener("click", () => run("scan"));
-
-btnClearLog.addEventListener("click", () => {
-  logPanel.innerHTML = "";
-  const empty = document.createElement("div");
-  empty.className = "log-empty";
-  empty.id        = "logEmpty";
-  empty.textContent = "No activity yet.";
-  logPanel.appendChild(empty);
-  setStats(null, null, null);
-  statCardIssues.classList.remove("warn");
-  statCardFixed.classList.remove("fixed");
-  setStatus("idle", "Ready — click a button below to begin.");
-});
+if (btnClearLog) {
+  btnClearLog.addEventListener("click", () => {
+    logPanel.innerHTML = "";
+    const empty = document.createElement("div");
+    empty.className = "log-empty";
+    empty.id        = "logEmpty";
+    empty.textContent = "No activity yet.";
+    logPanel.appendChild(empty);
+    setStats(null, null, null);
+    if (statCardIssues) statCardIssues.classList.remove("warn");
+    if (statCardFixed) statCardFixed.classList.remove("fixed");
+    setStatus("idle", "Ready — click a button below to begin.");
+  });
+}
 
 // ─── Webflow Extension Lifecycle ────────────────────────────────────────────
-// The Designer API fires this event when the active page or context changes.
-// We reset the UI so stats always reflect the current page.
 try {
   webflow.setExtensionSize({ height: 600 });
 } catch (_) {
